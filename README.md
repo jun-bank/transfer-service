@@ -380,51 +380,96 @@ X-User-Role: USER
 ## 📂 패키지 구조
 
 ```
-com.junbank.transfer
+com.jun_bank.transfer_service
 ├── TransferServiceApplication.java
-├── domain
-│   ├── entity
-│   │   ├── Transfer.java
-│   │   └── OutboxEvent.java
-│   ├── enums
-│   │   ├── TransferStatus.java
-│   │   ├── SagaStatus.java
-│   │   └── OutboxStatus.java
-│   └── repository
-│       ├── TransferRepository.java
-│       └── OutboxEventRepository.java
-├── application
-│   ├── service
-│   │   ├── TransferService.java
-│   │   └── TransferSagaOrchestrator.java
-│   ├── dto
-│   │   ├── request
-│   │   │   └── TransferRequest.java
-│   │   └── response
-│   │       ├── TransferResponse.java
-│   │       └── RecipientResponse.java
-│   └── saga
-│       ├── SagaStep.java
-│       └── SagaManager.java
-├── infrastructure
-│   ├── kafka
-│   │   ├── TransferEventProducer.java
-│   │   └── TransferEventConsumer.java
-│   ├── outbox
-│   │   ├── OutboxPublisher.java
-│   │   └── OutboxScheduler.java
-│   ├── feign
-│   │   └── AccountServiceClient.java
-│   └── config
-│       ├── JpaConfig.java
-│       ├── KafkaConfig.java
-│       └── SchedulerConfig.java
-└── presentation
-    ├── controller
-    │   └── TransferController.java
-    └── advice
-        └── TransferExceptionHandler.java
+├── global/                          # 전역 설정 레이어
+│   ├── config/                      # 설정 클래스
+│   │   ├── JpaConfig.java           # JPA Auditing 활성화
+│   │   ├── QueryDslConfig.java      # QueryDSL JPAQueryFactory 빈
+│   │   ├── KafkaProducerConfig.java # Kafka Producer (멱등성, JacksonJsonSerializer)
+│   │   ├── KafkaConsumerConfig.java # Kafka Consumer (수동 ACK, JacksonJsonDeserializer)
+│   │   ├── SecurityConfig.java      # Spring Security (헤더 기반 인증)
+│   │   ├── FeignConfig.java         # Feign Client 설정
+│   │   ├── SwaggerConfig.java       # OpenAPI 문서화
+│   │   └── AsyncConfig.java         # 비동기 처리 (ThreadPoolTaskExecutor)
+│   ├── infrastructure/
+│   │   ├── entity/
+│   │   │   └── BaseEntity.java      # 공통 엔티티 (Audit, Soft Delete)
+│   │   └── jpa/
+│   │       └── AuditorAwareImpl.java # JPA Auditing 사용자 정보
+│   ├── security/
+│   │   ├── UserPrincipal.java       # 인증 사용자 Principal
+│   │   ├── HeaderAuthenticationFilter.java # Gateway 헤더 인증 필터
+│   │   └── SecurityContextUtil.java # SecurityContext 유틸리티
+│   ├── feign/
+│   │   ├── FeignErrorDecoder.java   # Feign 에러 → BusinessException 변환
+│   │   └── FeignRequestInterceptor.java # 인증 헤더 전파
+│   └── aop/
+│       └── LoggingAspect.java       # 요청/응답 로깅 AOP
+└── domain/
+    └── transfer/                    # Transfer 도메인
+        ├── domain/                  # 순수 도메인 (Entity, VO, Enum)
+        ├── application/             # 유스케이스, Port, DTO
+        │   └── saga/                # SAGA 오케스트레이터 (추후 구현)
+        │       ├── SagaOrchestrator.java
+        │       └── SagaStep.java
+        ├── infrastructure/          # Adapter (Out) - Repository, Kafka, Outbox
+        │   └── outbox/              # Outbox 패턴 (추후 구현)
+        │       ├── OutboxPublisher.java
+        │       └── OutboxScheduler.java
+        └── presentation/            # Adapter (In) - Controller
 ```
+
+---
+
+## 🔧 Global 레이어 상세
+
+### Config 설정
+
+| 클래스 | 설명 |
+|--------|------|
+| `JpaConfig` | JPA Auditing 활성화 (`@EnableJpaAuditing`) |
+| `QueryDslConfig` | `JPAQueryFactory` 빈 등록 |
+| `KafkaProducerConfig` | 멱등성 Producer (ENABLE_IDEMPOTENCE=true, ACKS=all) |
+| `KafkaConsumerConfig` | 수동 ACK (MANUAL_IMMEDIATE), group-id: transfer-service-group |
+| `SecurityConfig` | Stateless 세션, 헤더 기반 인증, CSRF 비활성화 |
+| `FeignConfig` | 로깅 레벨 BASIC, 에러 디코더, 요청 인터셉터 |
+| `SwaggerConfig` | OpenAPI 3.0 문서화 설정 |
+| `AsyncConfig` | ThreadPoolTaskExecutor (core=5, max=10, queue=25) |
+
+### Security 설정
+
+| 클래스 | 설명 |
+|--------|------|
+| `HeaderAuthenticationFilter` | `X-User-Id`, `X-User-Role`, `X-User-Email` 헤더 → SecurityContext |
+| `UserPrincipal` | `UserDetails` 구현체, 인증된 사용자 정보 |
+| `SecurityContextUtil` | 현재 사용자 조회 유틸리티 |
+
+### BaseEntity (Soft Delete 지원)
+
+```java
+@MappedSuperclass
+public abstract class BaseEntity {
+    private LocalDateTime createdAt;      // 생성일시 (자동)
+    private LocalDateTime updatedAt;      // 수정일시 (자동)
+    private String createdBy;             // 생성자 (자동)
+    private String updatedBy;             // 수정자 (자동)
+    private LocalDateTime deletedAt;      // 삭제일시
+    private String deletedBy;             // 삭제자
+    private Boolean isDeleted = false;    // 삭제 여부
+    
+    public void delete(String deletedBy);  // Soft Delete
+    public void restore();                 // 복구
+}
+```
+
+### 추후 구현 예정 (SAGA/Outbox)
+
+| 클래스 | 설명 |
+|--------|------|
+| `SagaOrchestrator` | SAGA 패턴 오케스트레이터 |
+| `OutboxPublisher` | Outbox 테이블 기반 이벤트 발행 |
+| `OutboxScheduler` | Outbox 폴링 스케줄러 |
 
 ---
 
@@ -475,9 +520,9 @@ transfer-service:
 @Scheduled(fixedDelayString = "${transfer-service.outbox.polling-interval}")
 public void publishPendingEvents() {
     List<OutboxEvent> events = outboxRepository
-        .findByStatusOrderByCreatedAt(OutboxStatus.PENDING, 
-            PageRequest.of(0, batchSize));
-    
+            .findByStatusOrderByCreatedAt(OutboxStatus.PENDING,
+                    PageRequest.of(0, batchSize));
+
     for (OutboxEvent event : events) {
         try {
             kafkaTemplate.send(event.getTopic(), event.getPayload());
@@ -518,9 +563,9 @@ curl http://localhost:8080/api/v1/transfers/txf-uuid-abcd \
 @Test
 void 입금_실패시_보상_트랜잭션_실행() {
     // Given: 수취 계좌가 동결 상태
-    
+
     // When: 이체 요청
-    
+
     // Then: 
     // 1. 출금 완료
     // 2. 입금 실패
@@ -535,15 +580,15 @@ void 입금_실패시_보상_트랜잭션_실행() {
 @Test
 void Outbox_패턴으로_메시지_발행_보장() {
     // Given: 이체 요청
-    
+
     // When: 이체 처리 (Outbox에 저장)
-    
+
     // Then:
     // 1. Transfer 테이블에 레코드 존재
     // 2. Outbox 테이블에 PENDING 이벤트 존재
-    
+
     // When: OutboxScheduler 실행
-    
+
     // Then:
     // 1. Kafka에 메시지 발행됨
     // 2. Outbox 이벤트 상태 = SENT
